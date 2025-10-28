@@ -2,14 +2,35 @@
   "manifest_version": 3,
   "name": "ClearMind",
   "description": "Simplify, proofread, and translate the web using Chrome’s built-in AI.",
-  "version": "1.0",
+  "version": "1.1",
+  
   "action": {
-    "default_popup": "popup.html",
-    "default_icon": {
-      "16": "icons/icon16.png",
-      "48": "icons/icon48.png",
-      "128": "icons/icon128.png"
+    "default_popup": "popup.html"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "permissions": [
+    "contextMenus",
+    "activeTab",
+    "scripting",
+    "storage"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+
+  "ai": {
+    "on_device_model": {
+      "summarizer": {},
+      "translator": {},
+      "proofreader": {}
     }
   },
-  "permissions": ["contextMenus", "activeTab", "scripting"]
+
+  "origin_trials": {
+    "proofreader": "AuVfPS3YZVTfiw+azCHSIJncb2Y/pVcyVSKP8peruraXHUaQ9ORLk6K1mKc6BGAtF10ayae7kMFjHnr4DI/nQQQAAABxeyJvcmlnaW4iOiJjaHJvbWUtZXh0ZW5zaW9uOi8vamJsbXBhY2ZjaGdpYmhkZmdlaGhkbGZlanBtbHBlaGkiLCJmZWF0dXJlIjoiQUlQcm9vZnJlYWRlckFQSSIsImV4cGlyeSI6MTc3OTE0ODgwMH0=" 
+  }
 }
