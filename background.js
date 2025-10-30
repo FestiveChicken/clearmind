@@ -6,42 +6,30 @@ chrome.runtime.onInstalled.addListener(() => {
       title: "ClearMind",
       contexts: ["selection", "page"],
     });
-    
-    // --- Create 'Summarize as...' parent menu ---
+
+    // --- Create "Summarize as..." parent menu ---
     chrome.contextMenus.create({
       id: "clearmind-summarize-parent",
       parentId: "clearmind-root",
       title: "Summarize as...",
       contexts: ["selection"],
     });
+    const summaryModes = {
+      "bullets": "Bullet points",
+      "tldr": "TL;DR (1-2 sentences)",
+      "qa": "Q&A style",
+      "action": "Action items"
+    };
+    for (const [mode, title] of Object.entries(summaryModes)) {
+      chrome.contextMenus.create({
+        id: `clearmind-summarize-${mode}`,
+        parentId: "clearmind-summarize-parent",
+        title: title,
+        contexts: ["selection"],
+      });
+    }
 
-    // Add summary mode children
-    chrome.contextMenus.create({
-      id: "clearmind-summarize-tldr",
-      parentId: "clearmind-summarize-parent",
-      title: "TL;DR (1-2 sentences)",
-      contexts: ["selection"],
-    });
-    chrome.contextMenus.create({
-      id: "clearmind-summarize-bullets",
-      parentId: "clearmind-summarize-parent",
-      title: "Bullet Points",
-      contexts: ["selection"],
-    });
-    chrome.contextMenus.create({
-      id: "clearmind-summarize-qa",
-      parentId: "clearmind-summarize-parent",
-      title: "Q&A Style",
-      contexts: ["selection"],
-    });
-    chrome.contextMenus.create({
-      id: "clearmind-summarize-action",
-      parentId: "clearmind-summarize-parent",
-      title: "Action Items",
-      contexts: ["selection"],
-    });
-    
-    // --- Add other text-based actions ---
+    // --- Create other root-level actions ---
     chrome.contextMenus.create({
       id: `clearmind-proofread`,
       parentId: "clearmind-root",
@@ -51,48 +39,51 @@ chrome.runtime.onInstalled.addListener(() => {
     chrome.contextMenus.create({
       id: `clearmind-translate`,
       parentId: "clearmind-root",
-      title: "Translate",
+      title: "Translate (EN→ES)",
       contexts: ["selection"],
     });
-    
-    // --- Add YouTube page action ---
+
+    // --- Create YouTube "Summarize as..." parent menu ---
     chrome.contextMenus.create({
-      id: "clearmind-summarize_video-bullets", // Default to bullets
+      id: "clearmind-summarize-video-parent",
       parentId: "clearmind-root",
-      title: "Summarize YouTube Video",
+      title: "Summarize YouTube Video as...",
       contexts: ["page"],
-      documentUrlPatterns: ["*://*.youtube.com/watch*"]
+      documentUrlPatterns: ["*://*.youtube.com/watch*"],
     });
+    for (const [mode, title] of Object.entries(summaryModes)) {
+      chrome.contextMenus.create({
+        id: `clearmind-summarize_video-${mode}`,
+        parentId: "clearmind-summarize-video-parent",
+        title: title,
+        contexts: ["page"],
+        documentUrlPatterns: ["*://*.youtube.com/watch*"],
+      });
+    }
   });
 });
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (!tab?.id) return;
 
-  // Extract the core action
-  // e.g., "clearmind-summarize-bullets" -> "summarize-bullets"
   const action = info.menuItemId.replace("clearmind-", "");
-  
   let textToSend = info.selectionText;
 
-  // Handle page action (YouTube video)
-  if (action.startsWith("summarize_video")) {
+  // Handle page actions (YouTube video)
+  if (action.startsWith("summarize_video-")) {
     textToSend = ""; // No text is needed
-  } 
+  }
   // Handle text selection actions
   else if (!info.selectionText) {
-    // If it's a text action but there's no text, stop.
-    return;
+    return; // Stop if it's a text action but no text is selected
   }
 
   try {
-    // Try injecting content.js dynamically
     await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       files: ["content.js"],
     });
 
-    // Send the specific action (e.g., "summarize-bullets")
     await chrome.tabs.sendMessage(tab.id, {
       type: "clearmind-action",
       action,
@@ -103,7 +94,34 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   }
 });
 
-// This function is no longer used here, but safe to keep
+// --- NEW: Listen for Keyboard Shortcuts ---
+chrome.commands.onCommand.addListener(async (command, tab) => {
+  if (!tab?.id) return;
+
+  // We'll map this command to a default summarize action
+  if (command === "summarize-selection") {
+    try {
+      // 1. Inject content.js to make sure it's running
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        files: ["content.js"],
+      });
+
+      // 2. Send a message to content.js
+      // "get_selection" tells content.js to find its own selected text
+      // "summarize-bullets" is the default action we've chosen
+      await chrome.tabs.sendMessage(tab.id, {
+        type: "clearmind-action",
+        action: "summarize-bullets", // Default action for the shortcut
+        text: "get_selection" // Special flag
+      });
+    } catch (err) {
+      console.error(`Error handling command '${command}':`, err);
+    }
+  }
+});
+// --- END NEW ---
+
 function capitalize(str) {
   return str.charAt(0).toUpperCase() + str.slice(1);
 }

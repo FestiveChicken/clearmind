@@ -1,4 +1,3 @@
-// Wait for the UI to be built
 document.addEventListener("DOMContentLoaded", () => {
   const ui = window.ClearMindUI;
   if (!ui) {
@@ -6,54 +5,283 @@ document.addEventListener("DOMContentLoaded", () => {
     return;
   }
 
-  // --- API Key Logic ---
-  // Load saved API key when popup opens
+  // --- Load Saved API Key ---
   chrome.storage.local.get("geminiApiKey", (data) => {
     if (data.geminiApiKey) {
       ui.apiKeyInput.value = data.geminiApiKey;
     }
   });
 
-  // Save API key when button is clicked
-  ui.saveApiButton.addEventListener("click", () => {
+  // --- Load and Render History on Popup Open ---
+  loadAndRenderHistory();
+
+  // --- Save API Key Event ---
+  ui.saveApiKeyButton.addEventListener("click", () => {
     const apiKey = ui.apiKeyInput.value.trim();
     if (apiKey) {
       chrome.storage.local.set({ geminiApiKey: apiKey }, () => {
-        ui.saveApiButton.textContent = "Saved!";
-        setTimeout(() => { ui.saveApiButton.textContent = "Save Key"; }, 2000);
+        ui.saveApiKeyButton.textContent = "Saved!";
+        setTimeout(() => (ui.saveApiKeyButton.textContent = "Save Key"), 2000);
       });
     }
   });
 
+  // --- Clear History Event ---
+  ui.clearHistoryButton.addEventListener("click", () => {
+    chrome.storage.local.remove("aiHistory", () => {
+      loadAndRenderHistory(); // Re-render to show it's empty
+    });
+  });
 
-  /**
-   * Gets the correct Summarizer API options based on the selected mode.
-   * @param {string} mode - The value from the summaryModeSelect dropdown.
-   * @returns {object} Options for Summarizer.create()
-   */
-  function getLocalSummarizerOptions(mode) {
-    switch (mode) {
-      case "tldr":
-        // Use a prompt to ask for a short summary, and specify short length
-        return { prompt: "Summarize this text in one or two concise sentences.", length: "short" };
-      case "qa":
-        // Just use the prompt, the default type will be used
-        return { prompt: "Generate a list of questions and answers from this text." };
-      case "action":
-        return { type: "key-points", prompt: "Extract action items from this text." };
-      case "bullets":
-      default:
-        return { type: "key-points", format: "markdown", length: "medium" };
+  // --- Main AI Action Handler ---
+  const handleAiAction = async (event) => {
+    const action = event.target.dataset.action;
+    let inputText = ui.textarea.value.trim();
+    let isUrl = false;
+    let rawTextForCopy = "";
+
+    clearMessages();
+    ui.outputDiv.innerHTML = `<span style="opacity:0.7">Processing...</span>`;
+    const button = event.target;
+    button.disabled = true;
+    button.textContent = "Working...";
+    
+    if (action === "summarize" && (inputText.includes("youtube.com/watch") || inputText.includes("youtu.be/"))) {
+      isUrl = true;
+      if (!ui.apiKeyInput.value.trim()) {
+        showError("Please save a Gemini API key to summarize YouTube URLs.");
+        resetButton(button, "Summarize Text / URL");
+        return;
+      }
+    } else if (!inputText) {
+      showError("Please enter some text first.");
+      resetButton(button, capitalize(action));
+      return;
+    }
+
+    try {
+      if (action === "proofread") {
+        const result = await handleProofread(inputText);
+        rawTextForCopy = result.correctedText;
+        ui.outputDiv.innerHTML = result.htmlOutput;
+        ui.modelStatusDiv.textContent = `Using: ${result.modelUsed}`;
+        
+        // Save to history
+        await saveToHistory(inputText, result.correctedText, action, result.htmlOutput);
+        loadAndRenderHistory();
+      }
+      
+      else if (action === "summarize") {
+        const mode = ui.summaryModeSelect.value;
+        const result = await handleSummarize(inputText, mode, isUrl);
+        rawTextForCopy = result.summary;
+        const summaryHtml = result.summary.replace(/\n/g, '<br>');
+        ui.outputDiv.innerHTML = summaryHtml;
+        ui.modelStatusDiv.textContent = `Using: ${result.modelUsed}`;
+        
+        // Save to history
+        const fullAction = `summarize-${mode}`;
+        await saveToHistory(inputText, result.summary, fullAction, summaryHtml);
+        loadAndRenderHistory(); // Refresh history list
+      }
+
+      else if (action === "translate") {
+        const result = await handleTranslate(inputText);
+        rawTextForCopy = result.translated;
+        ui.outputDiv.innerHTML = result.htmlOutput;
+        ui.modelStatusDiv.textContent = `Using: ${result.modelUsed}`;
+        
+        // Save to history
+        await saveToHistory(inputText, result.translated, action, result.htmlOutput);
+        loadAndRenderHistory();
+      }
+
+      if (rawTextForCopy) {
+        ui.copyButton.style.display = 'block';
+        ui.copyButton.onclick = () => copyToClipboard(rawTextForCopy, ui.copyButton);
+      }
+
+    } catch (err) {
+      console.error("AI API error:", err);
+      showError(err.message);
+    } finally {
+      let originalText = "Summarize Text / URL";
+      if (action === "proofread") originalText = "Proofread Text";
+      if (action === "translate") originalText = "Translate Text (EN→ES)";
+      resetButton(button, originalText);
+    }
+  };
+
+  // --- Specific AI Logic Functions ---
+
+  async function handleSummarize(text, mode, isUrl) {
+    let modelUsed = "Local Model (Gemini Nano)";
+    let availability = "unavailable";
+    
+    if (!isUrl && "Summarizer" in self) {
+       availability = await Summarizer.availability();
+    }
+
+    if (!isUrl && (availability === "available" || availability === "downloadable")) {
+      if (availability === "downloadable") {
+        ui.outputDiv.innerHTML = `<span style="opacity:0.7">Downloading local model...</span>`;
+        await Summarizer.create({ monitor: createDownloadMonitor() });
+      }
+      const summarizerOptions = getLocalSummarizerOptionsForAction(mode);
+      const summarizer = await Summarizer.create(summarizerOptions);
+      ui.outputDiv.innerHTML = `<span style="opacity:0.7">Summarizing (local)...</span>`;
+      const summary = await summarizer.summarize(text);
+      return { summary, modelUsed };
+    } else {
+      modelUsed = "Cloud Model (Gemini 2.5 Flash)";
+      const apiKey = ui.apiKeyInput.value.trim();
+      if (!apiKey) {
+        throw new Error("Local model unavailable. Please set your Gemini API key in the extension popup to use the cloud fallback.");
+      }
+      ui.outputDiv.innerHTML = `<span style="opacity:0.7">Calling Cloud API...</span>`;
+      
+      let contentToSummarize = text;
+      const prompt = isUrl 
+        ? getCloudPromptForAction(contentToSummarize, `summarize_video-${mode}`)
+        : getCloudPromptForAction(contentToSummarize, `summarize-${mode}`);
+        
+      const summary = await callGeminiCloudApi(prompt, apiKey);
+      return { summary, modelUsed };
     }
   }
 
-  /**
-   * Generates a text prompt for the Gemini Cloud API.
-   * @param {string} text - The input text.
-   * @param {string} mode - The selected summary mode.
-   * @returns {string} The full prompt for the API.
-   */
-  function getCloudPrompt(text, mode) {
+  async function handleProofread(text) {
+    let modelUsed = "Local Model (Gemini Nano)";
+    if (!("Proofreader" in self)) {
+      throw new Error("Proofreader API not supported in this browser.");
+    }
+    const availability = await Proofreader.availability();
+    if (availability === "unavailable") {
+      throw new Error("Proofreader model unavailable. Check requirements.");
+    }
+    if (availability === "downloadable") {
+      ui.outputDiv.innerHTML = `<span style="opacity:0.7">Downloading proofreader model...</span>`;
+      await Proofreader.create({
+        expectedInputLanguages: ["en"],
+        expectedOutputLanguages: ["en"],
+        monitor: createDownloadMonitor(),
+      });
+    }
+    const proofreader = await Proofreader.create({
+      expectedInputLanguages: ["en"],
+      expectedOutputLanguages: ["en"],
+    });
+    const result = await proofreader.proofread(text);
+    let corrected = text.split("");
+    for (let i = result.corrections.length - 1; i >= 0; i--) {
+      const c = result.corrections[i];
+      corrected.splice(c.startIndex, c.endIndex - c.startIndex, c.replacement);
+    }
+    const correctedText = corrected.join("");
+    const htmlOutput = `
+      <b>Original:</b><br>${escapeHtml(text)}<br><br>
+      <b>Corrected:</b><br>${escapeHtml(correctedText)}
+    `;
+    return { correctedText, htmlOutput, modelUsed };
+  }
+
+  async function handleTranslate(text) {
+    let modelUsed = "Local Model (Gemini Nano)";
+    const sourceLang = "en";
+    const targetLang = "es";
+    if (!("Translator" in self)) {
+      throw new Error("Translator API not supported. (Requires Chrome 138+)");
+    }
+    let availability = await Translator.availability({
+      sourceLanguage: sourceLang,
+      targetLanguage: targetLang,
+    });
+    
+    async function ensureTranslator() {
+      if (availability === "downloadable") {
+        ui.outputDiv.innerHTML = `<span style="opacity:0.7">Downloading translator model...</span>`;
+        await Translator.create({
+          sourceLanguage: sourceLang,
+          targetLanguage: targetLang,
+          monitor: createDownloadMonitor(),
+        });
+        let attempts = 0;
+        do {
+          await new Promise((r) => setTimeout(r, 1000));
+          availability = await Translator.availability({
+            sourceLanguage: sourceLang,
+            targetLanguage: targetLang,
+          });
+          attempts++;
+        } while (availability !== "available" && attempts < 10);
+      }
+      if (availability !== "available") {
+        throw new Error("Translator model unavailable after download.");
+      }
+      return await Translator.create({
+        sourceLanguage: sourceLang,
+        targetLanguage: targetLang,
+      });
+    }
+
+    const translator = await ensureTranslator();
+    const translated = await translator.translate(text);
+    const htmlOutput = `
+      <b>Original (${sourceLang.toUpperCase()}):</b><br>${escapeHtml(text)}<br><br>
+      <b>Translated (${targetLang.toUpperCase()}):</b><br>${escapeHtml(translated)}
+    `;
+    return { translated, htmlOutput, modelUsed };
+  }
+  
+  // --- Cloud API Call ---
+  async function callGeminiCloudApi(prompt, apiKey) {
+    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+    try {
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          ...(prompt.includes("youtube.com") && { 
+            tools: [{ "google_search": {} }] 
+          })
+        })
+      });
+      if (!response.ok) {
+        const errorBody = await response.text();
+        throw new Error(`Cloud API Error: ${response.status} ${response.statusText}. Response: ${errorBody}`);
+      }
+      const result = await response.json();
+      const summary = result.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!summary) {
+        throw new Error("Cloud API returned an empty response.");
+      }
+      return summary;
+    } catch (err) {
+      console.error(err);
+      throw err;
+    }
+  }
+
+  // --- Prompt Generation ---
+  function getCloudPromptForAction(text, action) {
+    const mode = action.split('-').pop();
+    
+    if (action.startsWith("summarize_video-")) {
+       const videoUrl = text;
+       switch (mode) {
+         case "tldr":
+           return `Summarize this YouTube video in one or two concise sentences: ${videoUrl}`;
+         case "qa":
+           return `Generate a list of questions and their answers from this YouTube video: ${videoUrl}`;
+         case "action":
+           return `Extract all action items from this YouTube video as a bulleted list: ${videoUrl}`;
+         case "bullets":
+         default:
+           return `Summarize this YouTube video as a concise, bulleted list: ${videoUrl}`;
+       }
+    }
+    
     switch (mode) {
       case "tldr":
         return `Summarize the following text in one or two concise sentences:\n\n${text}`;
@@ -67,280 +295,138 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  /**
-   * Calls the Gemini Cloud API.
-   * @param {string} text - The input text.
-   * @param {string} apiKey - The user's API key.
-   * @param {string} mode - The selected summary mode.
-   * @returns {Promise<string>} The summarized text.
-   */
-  async function callGeminiCloudApi(text, apiKey, mode) {
-    ui.outputDiv.textContent = "Calling Gemini Cloud API...";
-    const prompt = getCloudPrompt(text, mode);
-    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
-
-    try {
-      const response = await fetch(apiUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }]
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error(`Cloud API Error: ${response.status} ${response.statusText}`);
-      }
-
-      const result = await response.json();
-      const summary = result.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!summary) {
-        throw new Error("Cloud API returned an empty response.");
-      }
-      return summary;
-    } catch (err) {
-      console.error(err);
-      throw err;
+  function getLocalSummarizerOptionsForAction(mode) {
+    switch (mode) {
+      case "tldr":
+        return { prompt: "Summarize this text in one or two concise sentences.", length: "short" };
+      case "qa":
+        return { prompt: "Generate a list of questions and answers from this text." };
+      case "action":
+        return { type: "key-points", prompt: "Extract action items from this text." };
+      case "bullets":
+      default:
+        return { type: "key-points", format: "markdown", length: "medium" };
     }
   }
 
-  // --- Main Handler ---
-  const handleAiAction = async (event) => {
-    const action = event.target.dataset.action;
-    console.log("Button clicked, action =", action);
+  // --- History Functions ---
+  async function saveToHistory(original, result, action, htmlOutput = null) {
+    return new Promise((resolve) => {
+      chrome.storage.local.get("aiHistory", (data) => {
+        const history = data.aiHistory || [];
+        const newItem = {
+          original,
+          result,
+          action, // e.g., "summarize-bullets", "proofread", "translate"
+          htmlOutput, // For proofread/translate
+          timestamp: new Date().toISOString(),
+        };
+        history.unshift(newItem); // Add to front
+        const limitedHistory = history.slice(0, 20); // Keep last 20
+        chrome.storage.local.set({ aiHistory: limitedHistory }, resolve);
+      });
+    });
+  }
 
-    const button = event.target;
-    const originalButtonText = button.textContent; // Store original text
-    button.disabled = true;
-    button.textContent = "Working...";
-    clearMessages();
-    ui.modelIndicator.textContent = ""; // Clear model indicator
-
-    try {
-      // === YOUTUBE VIDEO ACTION ===
-      if (action === "summarize_video") {
-        ui.outputDiv.textContent = "Checking for active YouTube tab...";
-        const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-        const currentTab = tabs[0];
-
-        if (currentTab && currentTab.url && currentTab.url.includes("youtube.com/watch")) {
-          ui.outputDiv.textContent = "Injecting script... See page for summary.";
-          
-          await chrome.scripting.executeScript({
-            target: { tabId: currentTab.id },
-            files: ["content.js"],
-          });
-          
-          // Send message to content.js to start summarization
-          // We default to "bullets" for video summaries, but you could add a dropdown for this too.
-          await chrome.tabs.sendMessage(currentTab.id, {
-            type: "clearmind-action",
-            action: "summarize_video-bullets", // Use a default summary mode
-            text: "", 
-          });
-          
-          await new Promise(r => setTimeout(r, 2500));
-          window.close(); // Close the popup
-        } else {
-          throw new Error("This only works on an active YouTube video page. Please navigate to a video and try again.");
-        }
-      }
+  function loadAndRenderHistory() {
+    chrome.storage.local.get("aiHistory", (data) => {
+      const history = data.aiHistory || [];
+      ui.historyContainer.innerHTML = ""; // Clear current list
       
-      // === TEXT-BASED ACTIONS ===
-      else {
-        const inputText = ui.textarea.value.trim();
-        if (!inputText) {
-          showError("Please enter some text first.");
-          button.disabled = false;
-          button.textContent = originalButtonText;
-          return;
-        }
+      if (history.length === 0) {
+        ui.historyContainer.innerHTML = `<span style="padding: 8px; display: block; color: #777;">No history yet.</span>`;
+        return;
+      }
+
+      history.forEach((item) => {
+        const itemDiv = document.createElement("div");
+        itemDiv.style.padding = "8px";
+        itemDiv.style.borderBottom = "1px solid #eee";
+        itemDiv.style.cursor = "pointer";
+        itemDiv.style.display = "flex";
+        itemDiv.style.flexDirection = "column";
         
-        ui.outputDiv.textContent = "Processing...";
+        // --- Create Title & Action Indicator ---
+        const resultText = document.createElement("span");
+        resultText.textContent = item.result.substring(0, 70) + "...";
+        
+        const actionText = document.createElement("span");
+        actionText.textContent = `Action: ${item.action}`;
+        actionText.style.fontSize = "10px";
+        actionText.style.color = "#333";
+        actionText.style.fontWeight = "bold";
+        actionText.style.marginTop = "4px";
 
-        // === PROOFREAD ===
-        if (action === "proofread") {
-          // (Proofread logic remains unchanged)
-          if (!("Proofreader" in self)) {
-            throw new Error("Proofreader API not supported in this browser.");
-          }
-          const availability = await Proofreader.availability();
-          if (availability === "unavailable") {
-            throw new Error("Proofreader model unavailable. Check requirements.");
-          }
-          if (availability === "downloadable") {
-            ui.outputDiv.textContent = "Model is downloading... Please wait.";
-            await Proofreader.create({
-              expectedInputLanguages: ["en"],
-              expectedOutputLanguages: ["en"],
-              monitor(m) {
-                m.addEventListener("downloadprogress", (e) => {
-                  const percent = Math.round(e.loaded * 100);
-                  ui.outputDiv.textContent = `Downloading model... ${percent}%`;
-                });
-              },
-            });
-          }
-          const proofreader = await Proofreader.create({
-            expectedInputLanguages: ["en"],
-            expectedOutputLanguages: ["en"],
-          });
-          const result = await proofreader.proofread(inputText);
-          if (!result || !result.corrections) {
-            throw new Error("Proofreader returned no corrections.");
-          }
-          let correctedText = inputText.split("");
-          for (let i = result.corrections.length - 1; i >= 0; i--) {
-            const c = result.corrections[i];
-            correctedText.splice(
-              c.startIndex,
-              c.endIndex - c.startIndex,
-              c.replacement
-            );
-          }
-          correctedText = correctedText.join("");
-          ui.outputDiv.innerHTML = `
-            <b>Original:</b><br>${escapeHtml(inputText)}<br><br>
-            <b>Corrected:</b><br>${escapeHtml(correctedText)}
-          `;
-        }
+        const dateText = document.createElement("span");
+        dateText.textContent = new Date(item.timestamp).toLocaleString();
+        dateText.style.fontSize = "10px";
+        dateText.style.color = "#777";
+        dateText.style.marginTop = "4px";
+        
+        itemDiv.appendChild(resultText);
+        itemDiv.appendChild(actionText);
+        itemDiv.appendChild(dateText);
 
-        // === SUMMARIZE ===
-        else if (action === "summarize") {
-          if (!("Summarizer" in self)) {
-            throw new Error("Summarizer API not supported. (Requires Chrome 138+)");
-          }
+        // Add hover effect
+        itemDiv.onmouseenter = () => itemDiv.style.backgroundColor = "#f9f9f9";
+        itemDiv.onmouseleave = () => itemDiv.style.backgroundColor = "transparent";
 
-          const availability = await Summarizer.availability();
-          const selectedMode = ui.summaryModeSelect.value;
-          let summary = "";
-          let modelUsed = "Local Model (Gemini Nano)"; // Default to local
-
-          if (availability === "available" || availability === "downloadable") {
-            // --- USE LOCAL MODEL ---
-            if (availability === "downloadable") {
-              ui.outputDiv.textContent = "Downloading local model... Please wait.";
-              await Summarizer.create({
-                monitor(m) {
-                  m.addEventListener("downloadprogress", (e) => {
-                    const percent = Math.round(e.loaded * 100);
-                    ui.outputDiv.textContent = `Downloading model... ${percent}%`;
-                  });
-                },
-              });
-            }
-
-            const summarizerOptions = getLocalSummarizerOptions(selectedMode);
-            console.log("Summarizing with local model:", summarizerOptions);
-            const summarizer = await Summarizer.create(summarizerOptions);
-            summary = await summarizer.summarize(inputText);
-            
-            // Format markdown for local model
-            if (summarizerOptions.format === "markdown") {
-              ui.outputDiv.innerHTML = `<b>Summary:</b><br>${summary.replace(/\n/g, '<br>')}`;
-            } else {
-              ui.outputDiv.textContent = summary;
-            }
-
+        // Add click to restore
+        itemDiv.onclick = () => {
+          ui.textarea.value = item.original;
+          ui.errorDiv.style.display = "none";
+          ui.modelStatusDiv.textContent = "Loaded from history.";
+          
+          // Restore output based on type
+          if (item.htmlOutput) {
+            ui.outputDiv.innerHTML = item.htmlOutput;
           } else {
-            // --- FALLBACK TO CLOUD API ---
-            modelUsed = "Cloud Model (Gemini 2.5 Flash)";
-            ui.outputDiv.textContent = "Local model unavailable. Falling back to Cloud API...";
-            const { geminiApiKey } = await chrome.storage.local.get("geminiApiKey");
-            
-            if (!geminiApiKey) {
-              throw new Error("Local model unavailable. Please enter and save a Gemini API key to use the cloud fallback.");
-            }
-            
-            summary = await callGeminiCloudApi(inputText, geminiApiKey, selectedMode);
-            // Cloud API returns markdown, so format it
-            ui.outputDiv.innerHTML = `<b>Summary:</b><br>${summary.replace(/\n/g, '<br>')}`;
+            // Default for summaries
+            ui.outputDiv.innerHTML = item.result.replace(/\n/g, '<br>');
           }
-
-          if (!summary) throw new Error("No summary returned. Try different input.");
-          ui.modelIndicator.textContent = `Model used: ${modelUsed}`;
-        }
-
-        // === TRANSLATE ===
-        else if (action === "translate") {
-          // (Translate logic remains unchanged)
-          if (!("Translator" in self)) {
-            throw new Error("Translator API not supported. (Requires Chrome 138+)");
-          }
-          const sourceLang = "en";
-          const targetLang = "es";
-          let availability = await Translator.availability({
-            sourceLanguage: sourceLang,
-            targetLanguage: targetLang,
-          });
-          async function ensureTranslator() {
-            if (availability === "downloadable") {
-              ui.outputDiv.textContent = "Downloading translator model... Please wait.";
-              await Translator.create({
-                sourceLanguage: sourceLang,
-                targetLanguage: targetLang,
-                monitor(m) {
-                  m.addEventListener("downloadprogress", (e) => {
-                    const percent = Math.round(e.loaded * 100);
-                    ui.outputDiv.textContent = `Downloading model... ${percent}%`;
-                  });
-                },
-              });
-              let attempts = 0;
-              do {
-                await new Promise((r) => setTimeout(r, 1000));
-                availability = await Translator.availability({
-                  sourceLanguage: sourceLang,
-                  targetLanguage: targetLang,
-                });
-                attempts++;
-              } while (availability !== "available" && attempts < 10);
-            }
-            if (availability !== "available") {
-              throw new Error("Translator model unavailable after download.");
-            }
-            return await Translator.create({
-              sourceLanguage: sourceLang,
-              targetLanguage: targetLang,
-            });
-          }
-          const translator = await ensureTranslator();
-          const translated = await translator.translate(inputText);
-          if (!translated)
-            throw new Error("Translation failed or returned empty text.");
-          ui.outputDiv.innerHTML = `
-            <b>Original (${sourceLang.toUpperCase()}):</b><br>${escapeHtml(inputText)}<br><br>
-            <b>Translated (${targetLang.toUpperCase()}):</b><br>${escapeHtml(translated)}
-          `;
-        }
-
-        else {
-          throw new Error(`Feature '${action}' not yet implemented.`);
-        }
-      }
-    } catch (err) {
-      console.error("AI API error:", err);
-      showError(err.message);
-    } finally {
-      if (action !== "summarize_video") {
-        button.disabled = false;
-        button.textContent = originalButtonText;
-      }
-    }
-  };
+          
+          ui.copyButton.style.display = 'block';
+          ui.copyButton.onclick = () => copyToClipboard(item.result, ui.copyButton);
+        };
+        
+        ui.historyContainer.appendChild(itemDiv);
+      });
+    });
+  }
+  // --- END History Functions ---
 
   // --- Helpers ---
-  const showError = (message) => {
-    ui.outputDiv.textContent = "";
+  function createDownloadMonitor() {
+    return (m) => {
+      m.addEventListener("downloadprogress", (e) => {
+        const percent = Math.round(e.loaded * 100);
+        ui.outputDiv.innerHTML = `<span style="opacity:0.7">Downloading model... ${percent}%</span>`;
+      });
+    };
+  }
+  
+  function showError(message) {
+    ui.outputDiv.innerHTML = "";
     ui.errorDiv.textContent = `Error: ${message}`;
     ui.errorDiv.style.display = "block";
-  };
+    ui.copyButton.style.display = "none";
+  }
 
-  const clearMessages = () => {
-    ui.outputDiv.textContent = "";
+  function clearMessages() {
+    ui.outputDiv.innerHTML = "";
     ui.errorDiv.textContent = "";
     ui.errorDiv.style.display = "none";
-  };
+    ui.modelStatusDiv.textContent = "";
+    ui.copyButton.style.display = "none";
+    ui.copyButton.onclick = null;
+  }
+
+  function resetButton(button, text) {
+    button.disabled = false;
+    button.textContent = text;
+  }
+
+  const capitalize = (str) => str.charAt(0).toUpperCase() + str.slice(1);
 
   const escapeHtml = (str) =>
     str
@@ -350,12 +436,30 @@ document.addEventListener("DOMContentLoaded", () => {
       .replace(/"/g, "&quot;")
       .replace(/'/g, "&#039;");
 
-  [ui.summarizeButton, ui.proofreadButton, ui.translateButton, ui.youtubeButton].forEach((btn) => {
-    if (btn) {
-      btn.addEventListener("click", handleAiAction);
+  function copyToClipboard(text, buttonElement) {
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.top = '-9999px';
+    textarea.style.left = '-9999px';
+    document.body.appendChild(textarea);
+    textarea.select();
+    try {
+      document.execCommand('copy');
+      if (buttonElement) {
+        buttonElement.textContent = 'Copied!';
+        setTimeout(() => { buttonElement.textContent = 'Copy'; }, 2000);
+      }
+    } catch (err) {
+      console.error('Failed to copy text: ', err);
+      if (buttonElement) buttonElement.textContent = 'Failed!';
     }
+    document.body.removeChild(textarea);
+  }
+
+  // --- Attach Main Event Listeners ---
+  [ui.summarizeButton, ui.proofreadButton, ui.translateButton].forEach((btn) => {
+    btn.addEventListener("click", handleAiAction);
   });
 });
-
-
 

@@ -2,8 +2,7 @@
   "manifest_version": 3,
   "name": "ClearMind",
   "description": "Simplify, proofread, and translate the web using Chrome’s built-in AI.",
-  "version": "1.2",
-  
+  "version": "1.3",
   "action": {
     "default_popup": "popup.html"
   },
@@ -19,12 +18,20 @@
     "storage"
   ],
   "host_permissions": [
-    "https://generativelanguage.googleapis.com/*"
+    "https://generativelanguage.googleapis.com/"
   ],
   "background": {
     "service_worker": "background.js"
   },
-
+  "commands": {
+    "summarize-selection": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+F",
+        "mac": "Command+Shift+F"
+      },
+      "description": "Summarize selected text (Bullet Points)"
+    }
+  },
   "ai": {
     "on_device_model": {
       "summarizer": {},
@@ -32,9 +39,8 @@
       "proofreader": {}
     }
   },
-
   "origin_trials": {
-    "proofreader": "AuVfPS3YZVTfiw+azCHSIJncb2Y/pVcyVSKP8peruraXHUaQ9ORLk6K1mKc6BGAtF10ayae7kMFjHnr4DI/nQQQAAABxeyJvcmlnaW4iOiJjaHJvbWUtZXh0ZW5zaW9uOi8vamJsbXBhY2ZjaGdpYmhkZmdlaGhkbGZlanBtbHBlaGkiLCJmZWF0dXJlIjoiQUlQcm9vZnJlYWRlckFQSSIsImV4cGlyeSI6MTc3OTE0ODgwMH0=" 
+    "proofreader": "AuVfPS3YZVTfiw+azCHSIJncb2Y/pVcyVSKP8peruraXHUaQ9ORLk6K1mKc6BGAtF10ayae7kMFjHnr4DI/nQQQAAABxeyJvcmlnaW4iOiJjaHJvbWUtZXh0ZW5zaW9uOi8vamJsbXBhY2ZjaGdpYmhkZmdlaGhkbGZlanBtbHBlaGkiLCJmZWF0dXJlIjoiQUlQcm9vZnJlYWRlckFQSSIsImV4cGlyeSI6MTc3OTE0ODgwMH0="
   }
 }
 
