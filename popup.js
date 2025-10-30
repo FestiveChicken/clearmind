@@ -84,6 +84,32 @@ youtubeButton.style.color = "white";
 youtubeButton.style.border = "none";
 youtubeButton.style.fontWeight = "bold";
 
+// --- API Key Input ---
+const apiLabel = document.createElement("label");
+apiLabel.textContent = "Gemini Cloud API Key (for Fallback):";
+apiLabel.style.fontSize = "12px";
+apiLabel.style.display = "block";
+apiLabel.style.marginBottom = "4px";
+apiLabel.style.marginTop = "10px";
+root.appendChild(apiLabel);
+
+const apiKeyInput = document.createElement("input");
+apiKeyInput.id = "apiKeyInput";
+apiKeyInput.type = "password";
+apiKeyInput.placeholder = "Enter your API key";
+apiKeyInput.style.width = "100%";
+apiKeyInput.style.padding = "6px";
+apiKeyInput.style.marginBottom = "6px";
+root.appendChild(apiKeyInput);
+
+const saveApiButton = document.createElement("button");
+saveApiButton.id = "saveApiButton";
+saveApiButton.textContent = "Save Key";
+saveApiButton.style.width = "100%";
+saveApiButton.style.padding = "6px";
+saveApiButton.style.fontSize = "12px";
+root.appendChild(saveApiButton);
+
 
 // Output area
 const outputDiv = document.createElement("div");
@@ -91,6 +117,15 @@ outputDiv.id = "output";
 outputDiv.style.marginTop = "10px";
 outputDiv.style.fontSize = "14px";
 root.appendChild(outputDiv);
+
+// --- Model Indicator ---
+const modelIndicator = document.createElement("div");
+modelIndicator.id = "modelIndicator";
+modelIndicator.style.fontSize = "10px";
+modelIndicator.style.color = "#888";
+modelIndicator.style.marginTop = "4px";
+modelIndicator.style.textAlign = "right";
+root.appendChild(modelIndicator);
 
 // Error area
 const errorDiv = document.createElement("div");
@@ -108,7 +143,10 @@ window.ClearMindUI = {
   proofreadButton,
   translateButton,
   youtubeButton,
+  apiKeyInput, // Export new UI
+  saveApiButton, // Export new UI
   outputDiv,
+  modelIndicator, // Export new UI
   errorDiv,
 };
 

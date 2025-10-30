@@ -6,22 +6,101 @@ document.addEventListener("DOMContentLoaded", () => {
     return;
   }
 
+  // --- API Key Logic ---
+  // Load saved API key when popup opens
+  chrome.storage.local.get("geminiApiKey", (data) => {
+    if (data.geminiApiKey) {
+      ui.apiKeyInput.value = data.geminiApiKey;
+    }
+  });
+
+  // Save API key when button is clicked
+  ui.saveApiButton.addEventListener("click", () => {
+    const apiKey = ui.apiKeyInput.value.trim();
+    if (apiKey) {
+      chrome.storage.local.set({ geminiApiKey: apiKey }, () => {
+        ui.saveApiButton.textContent = "Saved!";
+        setTimeout(() => { ui.saveApiButton.textContent = "Save Key"; }, 2000);
+      });
+    }
+  });
+
+
   /**
    * Gets the correct Summarizer API options based on the selected mode.
    * @param {string} mode - The value from the summaryModeSelect dropdown.
    * @returns {object} Options for Summarizer.create()
    */
-  function getSummarizerOptions(mode) {
+  function getLocalSummarizerOptions(mode) {
     switch (mode) {
       case "tldr":
-        return { type: "passage", length: "short" };
+        // Use a prompt to ask for a short summary, and specify short length
+        return { prompt: "Summarize this text in one or two concise sentences.", length: "short" };
       case "qa":
-        return { type: "passage", prompt: "Generate a list of questions and answers from this text." };
+        // Just use the prompt, the default type will be used
+        return { prompt: "Generate a list of questions and answers from this text." };
       case "action":
         return { type: "key-points", prompt: "Extract action items from this text." };
       case "bullets":
       default:
         return { type: "key-points", format: "markdown", length: "medium" };
+    }
+  }
+
+  /**
+   * Generates a text prompt for the Gemini Cloud API.
+   * @param {string} text - The input text.
+   * @param {string} mode - The selected summary mode.
+   * @returns {string} The full prompt for the API.
+   */
+  function getCloudPrompt(text, mode) {
+    switch (mode) {
+      case "tldr":
+        return `Summarize the following text in one or two concise sentences:\n\n${text}`;
+      case "qa":
+        return `Generate a list of questions and their answers from the following text:\n\n${text}`;
+      case "action":
+        return `Extract all action items from the following text as a bulleted list:\n\n${text}`;
+      case "bullets":
+      default:
+        return `Summarize the following text as a concise, bulleted list:\n\n${text}`;
+    }
+  }
+
+  /**
+   * Calls the Gemini Cloud API.
+   * @param {string} text - The input text.
+   * @param {string} apiKey - The user's API key.
+   * @param {string} mode - The selected summary mode.
+   * @returns {Promise<string>} The summarized text.
+   */
+  async function callGeminiCloudApi(text, apiKey, mode) {
+    ui.outputDiv.textContent = "Calling Gemini Cloud API...";
+    const prompt = getCloudPrompt(text, mode);
+    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+
+    try {
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }]
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Cloud API Error: ${response.status} ${response.statusText}`);
+      }
+
+      const result = await response.json();
+      const summary = result.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!summary) {
+        throw new Error("Cloud API returned an empty response.");
+      }
+      return summary;
+    } catch (err) {
+      console.error(err);
+      throw err;
     }
   }
 
@@ -35,6 +114,7 @@ document.addEventListener("DOMContentLoaded", () => {
     button.disabled = true;
     button.textContent = "Working...";
     clearMessages();
+    ui.modelIndicator.textContent = ""; // Clear model indicator
 
     try {
       // === YOUTUBE VIDEO ACTION ===
@@ -132,37 +212,53 @@ document.addEventListener("DOMContentLoaded", () => {
           }
 
           const availability = await Summarizer.availability();
-          if (availability === "unavailable") {
-            throw new Error("Summarizer model unavailable. Check hardware requirements.");
-          }
-          if (availability === "downloadable") {
-            ui.outputDiv.textContent = "Model is downloading... Please wait.";
-            await Summarizer.create({
-              monitor(m) {
-                m.addEventListener("downloadprogress", (e) => {
-                  const percent = Math.round(e.loaded * 100);
-                  ui.outputDiv.textContent = `Downloading model... ${percent}%`;
-                });
-              },
-            });
-          }
-
-          // Get the selected mode from the dropdown
           const selectedMode = ui.summaryModeSelect.value;
-          const summarizerOptions = getSummarizerOptions(selectedMode);
-          
-          console.log("Summarizing with options:", summarizerOptions);
-          const summarizer = await Summarizer.create(summarizerOptions);
+          let summary = "";
+          let modelUsed = "Local Model (Gemini Nano)"; // Default to local
 
-          const summary = await summarizer.summarize(inputText);
-          if (!summary) throw new Error("No summary returned. Try different input.");
+          if (availability === "available" || availability === "downloadable") {
+            // --- USE LOCAL MODEL ---
+            if (availability === "downloadable") {
+              ui.outputDiv.textContent = "Downloading local model... Please wait.";
+              await Summarizer.create({
+                monitor(m) {
+                  m.addEventListener("downloadprogress", (e) => {
+                    const percent = Math.round(e.loaded * 100);
+                    ui.outputDiv.textContent = `Downloading model... ${percent}%`;
+                  });
+                },
+              });
+            }
 
-          // Use innerHTML for markdown, textContent for others
-          if (summarizerOptions.format === "markdown") {
-             ui.outputDiv.innerHTML = `<b>Summary:</b><br>${summary.replace(/\n/g, '<br>')}`;
+            const summarizerOptions = getLocalSummarizerOptions(selectedMode);
+            console.log("Summarizing with local model:", summarizerOptions);
+            const summarizer = await Summarizer.create(summarizerOptions);
+            summary = await summarizer.summarize(inputText);
+            
+            // Format markdown for local model
+            if (summarizerOptions.format === "markdown") {
+              ui.outputDiv.innerHTML = `<b>Summary:</b><br>${summary.replace(/\n/g, '<br>')}`;
+            } else {
+              ui.outputDiv.textContent = summary;
+            }
+
           } else {
-             ui.outputDiv.textContent = summary;
+            // --- FALLBACK TO CLOUD API ---
+            modelUsed = "Cloud Model (Gemini 2.5 Flash)";
+            ui.outputDiv.textContent = "Local model unavailable. Falling back to Cloud API...";
+            const { geminiApiKey } = await chrome.storage.local.get("geminiApiKey");
+            
+            if (!geminiApiKey) {
+              throw new Error("Local model unavailable. Please enter and save a Gemini API key to use the cloud fallback.");
+            }
+            
+            summary = await callGeminiCloudApi(inputText, geminiApiKey, selectedMode);
+            // Cloud API returns markdown, so format it
+            ui.outputDiv.innerHTML = `<b>Summary:</b><br>${summary.replace(/\n/g, '<br>')}`;
           }
+
+          if (!summary) throw new Error("No summary returned. Try different input.");
+          ui.modelIndicator.textContent = `Model used: ${modelUsed}`;
         }
 
         // === TRANSLATE ===
@@ -260,4 +356,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 });
+
+
 

@@ -54,20 +54,80 @@ function getTranscript() {
  * @param {string} action - The action from the message (e.g., "summarize-tldr").
  * @returns {object} Options for Summarizer.create()
  */
-function getSummarizerOptionsForAction(action) {
+function getLocalSummarizerOptionsForAction(action) {
   // Extract the mode (e.g., "tldr" from "summarize-tldr")
   const mode = action.split('-').pop(); 
   
   switch (mode) {
     case "tldr":
-      return { type: "passage", length: "short" };
+      // Use a prompt to ask for a short summary, and specify short length
+      return { prompt: "Summarize this text in one or two concise sentences.", length: "short" };
     case "qa":
-      return { type: "passage", prompt: "Generate a list of questions and answers from this text." };
+      // Just use the prompt, the default type will be used
+      return { prompt: "Generate a list of questions and answers from this text." };
     case "action":
       return { type: "key-points", prompt: "Extract action items from this text." };
     case "bullets":
     default:
       return { type: "key-points", format: "markdown", length: "medium" };
+  }
+}
+
+/**
+ * Generates a text prompt for the Gemini Cloud API based on the action.
+ * @param {string} text - The input text.
+ * @param {string} action - The action string (e.g., "summarize-tldr").
+ * @returns {string} The full prompt for the API.
+ */
+function getCloudPromptForAction(text, action) {
+  const mode = action.split('-').pop();
+  switch (mode) {
+    case "tldr":
+      return `Summarize the following text in one or two concise sentences:\n\n${text}`;
+    case "qa":
+      return `Generate a list of questions and their answers from the following text:\n\n${text}`;
+    case "action":
+      return `Extract all action items from the following text as a bulleted list:\n\n${text}`;
+    case "bullets":
+    default:
+      return `Summarize the following text as a concise, bulleted list:\n\n${text}`;
+  }
+}
+
+/**
+ * Calls the Gemini Cloud API.
+ * @param {string} text - The input text.
+ * @param {string} apiKey - The user's API key.
+ * @param {string} action - The action string (e.g., "summarize-tldr").
+ * @returns {Promise<string>} The summarized text.
+ */
+async function callGeminiCloudApi(text, apiKey, action) {
+  showBubble("Calling Gemini Cloud API...", true);
+  const prompt = getCloudPromptForAction(text, action);
+  const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+
+  try {
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }]
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`Cloud API Error: ${response.status} ${response.statusText}`);
+    }
+
+    const result = await response.json();
+    const summary = result.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!summary) {
+      throw new Error("Cloud API returned an empty response.");
+    }
+    return summary;
+  } catch (err) {
+    console.error(err);
+    throw err;
   }
 }
 
@@ -96,28 +156,43 @@ chrome.runtime.onMessage.addListener(async (msg) => {
       if (!("Summarizer" in self)) throw new Error("Summarizer API not supported.");
 
       const availability = await Summarizer.availability();
-      if (availability === "downloadable") {
-        showBubble("Downloading summarizer model...", true);
-        await Summarizer.create({
-          monitor(m) {
-            m.addEventListener("downloadprogress", (e) =>
-              showBubble(`Downloading... ${Math.round(e.loaded * 100)}%`, true)
-            );
-          },
-        });
+      let summary = "";
+      let modelUsed = "Local Model (Gemini Nano)";
+
+      if (availability === "available" || availability === "downloadable") {
+        // --- USE LOCAL MODEL ---
+        if (availability === "downloadable") {
+          showBubble("Downloading local model...", true);
+          await Summarizer.create({
+            monitor(m) {
+              m.addEventListener("downloadprogress", (e) =>
+                showBubble(`Downloading... ${Math.round(e.loaded * 100)}%`, true)
+              );
+            },
+          });
+        }
+        
+        const summarizerOptions = getLocalSummarizerOptionsForAction(action);
+        const summarizer = await Summarizer.create(summarizerOptions);
+        
+        showBubble("Summarizing content (local)...", true);
+        summary = await summarizer.summarize(contentToSummarize);
+        
+      } else {
+        // --- FALLBACK TO CLOUD API ---
+        modelUsed = "Cloud Model (Gemini 2.5 Flash)";
+        showBubble("Local model unavailable. Falling back to Cloud API...", true);
+        const { geminiApiKey } = await chrome.storage.local.get("geminiApiKey");
+        
+        if (!geminiApiKey) {
+          throw new Error("Local model unavailable. Please set your Gemini API key in the extension popup to use the cloud fallback.");
+        }
+        
+        summary = await callGeminiCloudApi(contentToSummarize, geminiApiKey, action);
       }
-      
-      const summarizerOptions = getSummarizerOptionsForAction(action);
-      const summarizer = await Summarizer.create(summarizerOptions);
-      
-      showBubble("Summarizing content...", true);
-      const summary = await summarizer.summarize(contentToSummarize);
-      
-      let formattedSummary = summary;
-      if (summarizerOptions.format === "markdown") {
-        formattedSummary = formattedSummary.replace(/\n/g, '<br>');
-      }
-      showBubble(`<b>${title}:</b><br>${formattedSummary}`);
+
+      let formattedSummary = summary.replace(/\n/g, '<br>');
+      showBubble(`<b>${title} (${modelUsed}):</b><br>${formattedSummary}`);
     }
 
     // === PROOFREAD ===
@@ -212,4 +287,6 @@ chrome.runtime.onMessage.addListener(async (msg) => {
     }
   }
 });
+
+
 
