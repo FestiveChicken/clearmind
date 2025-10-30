@@ -1,146 +1,76 @@
-# ClearMind – AI-Powered Chrome Extension
+# **ClearMind: Your AI Thought Partner**
 
-🧠 *“Your thought partner for focus, clarity, and productivity.”*
+**ClearMind** is a powerful Chrome extension that integrates on-device AI (Gemini Nano) with a cloud fallback (Gemini 2.5 Flash) to help you summarize, proofread, and translate the web.
 
----
+It works from the extension popup, a right-click context menu, and a keyboard shortcut, saving all your results to a convenient history tab.
 
-## 📌 Description
+## **✨ Features**
 
-ClearMind is a Chrome extension that helps users structure their thoughts, reduce mental clutter, and stay focused.  
-It leverages built-in AI APIs to provide quick summaries, task breakdowns, and personalized focus prompts — directly in your browser.
+* **Hybrid AI:** Automatically uses the local Gemini Nano model for speed and privacy. If Nano is unavailable, it seamlessly falls back to the powerful Gemini 2.5 Flash cloud API (requires a user-provided API key).  
+* **Multiple Summarizers:**  
+  * **Text Summary:** Summarize any selected text on the web.  
+  * **YouTube Video Summary:** Summarize YouTube videos by pasting the URL into the popup or right-clicking on a video page.  
+* **Advanced Summary Modes:** Choose your summary format:  
+  * TL;DR (1-2 sentences)  
+  * Bullet Points  
+  * Q\&A Style  
+  * Action Items  
+* **On-Device Proofreader:** Fix grammar and spelling in any selected text (en-US).  
+* **On-Device Translator:** Translate selected text from English to Spanish (en → es).  
+* **Convenient Access:**  
+  * **Extension Popup:** Paste text or a YouTube URL.  
+  * **Context Menu:** Right-click selected text or a YouTube page.  
+  * **Keyboard Shortcut:** Press Ctrl+Shift+S (or Cmd+Shift+S) to summarize selected text.  
+* **Persistent History:** Automatically saves your last 20 summaries, proofreads, and translations. View them, reload them, and copy them from the "History" tab in the popup.  
+* **Copy to Clipboard:** Instantly copy any AI-generated result with a single click.
 
-- **Problem:** Many people get overwhelmed by scattered ideas and distractions while working online.  
-- **Solution:** ClearMind offers an AI-powered companion that organizes thoughts and simplifies decision-making.
+## **🛠️ How to Use**
 
----
+1. **Clone or download** this repository.  
+2. Open chrome://extensions/ in your Chrome browser.  
+3. Enable **Developer Mode** (top-right toggle).  
+4. Click **Load unpacked** and select the folder containing this code.  
+5. Pin the ClearMind icon to your toolbar.
 
-## 🚧 Status
+**Setup (Required for Cloud Fallback):**
 
-⚠️ **Work in progress** – Currently under active development for the Google Hackathon  
+1. Click the ClearMind icon to open the popup.  
+2. Go to the "Settings" tab.  
+3. Obtain a Gemini API key from [Google AI Studio](https://aistudio.google.com/app/apikey).  
+4. Paste your API key into the input field and click **Save Key**.
 
----
+## **🧠 Core AI Technology**
 
-## 🛠️ How to Use (Developer Mode)
+ClearMind uses a "local-first" approach for speed and privacy.
 
-1. Clone or download this repository.  
-2. Open `chrome://extensions/` in Chrome.  
-3. Enable **Developer Mode** (toggle top-right).  
-4. Click **Load unpacked** and select the `clearmind-extension` folder.  
-5. The extension will now be available in your toolbar.  
+### **1\. On-Device AI (Gemini Nano)**
 
----
+The extension primarily uses the AI APIs built directly into Chrome:
 
-## 🧩 Built-in Chrome AI APIs
+* **Summarizer**: Used for all text summarization modes (TL;DR, Bullets, etc.) when the local model is available.  
+* **Proofreader**: Used for the "Proofread" function.  
+* **Translator**: Used for the "Translate" function.
 
-ClearMind integrates **on-device generative AI** features available in **Chrome 138+** through the new family of browser-native APIs.  
-These features run entirely in the browser — no external API keys, servers, or user data uploads required.
+This logic is triggered by checking if ("Summarizer" in self), etc.
 
----
+### **2\. Cloud AI Fallback (Gemini 2.5 Flash)**
 
-## 🧠 1. Summarizer API
+If a local model is unavailable (e.g., Summarizer.availability() returns "unavailable"), the extension automatically switches to the cloud-based gemini-2.5-flash-preview-09-2025 model via the Google AI API.
 
-**Purpose:** Condenses long passages of text into concise summaries or bullet points.  
+* This provides a robust and reliable experience for all users.  
+* It is **required** for summarizing YouTube video URLs, as this action uses the Google Search tool to fetch video information.
 
-**Namespace:** `Summarizer`  
-**Used in:** `logic.js`, `content.js`  
-
-**Availability check:**
-```js
-if ('Summarizer' in self) { /* supported */ }
-const availability = await Summarizer.availability();
-```
-
-**Modes:**
-- `type: "key-points"` – returns bullet summaries  
-- `format: "markdown"` – preserves structure  
-- `length: "medium"` – balanced summary length  
-
-When the model is not yet downloaded, ClearMind automatically handles model download progress and retries once it becomes available.
-
----
-
-## ✍️ 2. Proofreader API
-
-**Purpose:** Detects and corrects grammar, punctuation, and style issues in English text.  
-
-**Namespace:** `Proofreader`  
-**Used in:** `logic.js`, `content.js`  
-
-**Availability check:**
-```js
-if ('Proofreader' in self) { /* supported */ }
-const availability = await Proofreader.availability();
-```
-
-**Options:**
-- `expectedInputLanguages: ['en']`  
-- `expectedOutputLanguages: ['en']`  
-
-Returns a set of text corrections (`startIndex`, `endIndex`, `replacement`) which are automatically applied to reconstruct a cleaned version of the original text.
-
----
-
-## 🌐 3. Translator API
-
-**Purpose:** Translates text locally between supported language pairs using on-device AI models.  
-
-**Namespace:** `Translator`  
-**Used in:** `logic.js`, `content.js`  
-
-**Availability check:**
-```js
-if ('Translator' in self) { /* supported */ }
-const availability = await Translator.availability({
-  sourceLanguage: 'en',
-  targetLanguage: 'es',
-});
-```
-
-**Automatic model download:**  
-ClearMind automatically starts downloading the translation model if it isn’t available and continues to translation once ready — **no second click required.**
-
-**Default configuration:** English → Spanish  
-(Support for other target languages planned.)
-
----
-
-## ⚙️ Origin Trial Setup (for Chrome Extensions)
-
-To enable these APIs before full public release, ClearMind uses a **Chrome Origin Trial token**.
-
-Add the token to your `manifest.json`:
-```json
-"trial_tokens": [
-  "YOUR_ORIGIN_TRIAL_TOKEN_HERE"
-]
-```
-
-Chrome will automatically grant access to the **Summarizer**, **Proofreader**, and **Translator** APIs for the extension’s origin:
-```
-chrome-extension://<your-extension-id>/
-```
-
-**References:**
-- [Chrome Summarizer API Documentation](https://developer.chrome.com/docs/ai/summarizer-api)
-- [Chrome Proofreader API Documentation](https://developer.chrome.com/docs/ai/proofreader-api)
-- [Chrome Translator API Documentation](https://developer.chrome.com/docs/ai/translator-api)
-- [Chrome Origin Trials Overview](https://developer.chrome.com/docs/web-platform/origin-trials)
-
----
-
-## 🧱 Architecture Overview
+## **🧱 Architecture**
 
 | File | Purpose |
-|------|----------|
-| `popup.html` | Defines popup UI loaded by the extension toolbar button |
-| `popup.js` | Builds the popup UI dynamically |
-| `logic.js` | Core logic for Summarizer, Proofreader, Translator (popup actions) |
-| `background.js` | Handles right-click (context menu) actions |
-| `content.js` | Injected into pages; performs AI processing and shows floating results |
-| `manifest.json` | Extension configuration, permissions, and trial tokens |
+| :---- | :---- |
+| popup.html | The HTML structure for the extension popup. |
+| popup.js | Dynamically builds all UI elements for the popup (buttons, tabs, history list, etc.). |
+| logic.js | The "main" function for the popup. Handles all button clicks, API calls (local and cloud), and history management. |
+| background.js | Creates all right-click context menu items (for text and YouTube pages). Listens for the Ctrl+Shift+S keyboard shortcut. |
+| content.js | Injected into web pages to show the floating result bubble. Contains all logic for handling messages from the background.js script. |
+| manifest.json | Configures the extension, sets permissions (storage, contextMenus, scripting), registers AI features, and defines the keyboard shortcut. |
 
----
+## **📜 License**
 
-## 📜 License
-
-This project is licensed under the [MIT License](LICENSE).
+This project is licensed under the [MIT License](https://www.google.com/search?q=LICENSE).
